@@ -1,0 +1,2 @@
+export const cleanName=value=>typeof value==='string'?[...value.normalize('NFC').replace(/[\p{Cc}\p{Cf}<>]/gu,'').trim().replace(/\s+/g,' ')].slice(0,18).join(''):'';
+export function cleanInput(body){let x=Number(body.x),y=Number(body.y);if(!Number.isFinite(x))x=0;if(!Number.isFinite(y))y=0;const len=Math.max(1,Math.hypot(x,y));return{x:x/len,y:y/len,actions:(Array.isArray(body.actions)?body.actions:[]).slice(-6).filter(a=>a&&['dash','portal','haste','rage','ready'].includes(a.kind)&&Number.isSafeInteger(a.seq)&&a.seq>0&&a.seq<1e9).map(a=>({kind:a.kind,seq:a.seq}))};}
