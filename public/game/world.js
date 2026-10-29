@@ -22,25 +22,29 @@ export function layout(index){
  return out;
 }
 export const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
-export const distance=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+export const distance=(a,b)=>{const dx=a.x-b.x,dy=a.y-b.y;return Math.sqrt(dx*dx+dy*dy);};
 export function blocked(x,y,r,obstacles){
  if(x<r+35||y<r+35||x>WORLD.width-r-35||y>WORLD.height-r-35)return true;
  return obstacles.some(o=>{const dx=x-clamp(x,o.x,o.x+o.w),dy=y-clamp(y,o.y,o.y+o.h);return dx*dx+dy*dy<r*r||(x>=o.x&&x<=o.x+o.w&&y>=o.y&&y<=o.y+o.h);});
 }
 export function lineClear(a,b,obstacles,r=0){
  // Slab intersection against expanded bounds; no hits or pickup magnets through walls.
- for(const o of obstacles){let lo=0,hi=1;for(const[start,delta,min,max]of[[a.x,b.x-a.x,o.x-r,o.x+o.w+r],[a.y,b.y-a.y,o.y-r,o.y+o.h+r]]){
-  if(Math.abs(delta)<1e-8){if(start<min||start>max){lo=2;break;}}
-  else{let t1=(min-start)/delta,t2=(max-start)/delta;if(t1>t2)[t1,t2]=[t2,t1];lo=Math.max(lo,t1);hi=Math.min(hi,t2);}
- }if(lo<=hi&&hi>=0&&lo<=1)return false;}return true;
+ const dx=b.x-a.x,dy=b.y-a.y,vertical=Math.abs(dx)<1e-8,horizontal=Math.abs(dy)<1e-8;
+ for(const o of obstacles){let lo=0,hi=1;
+  if(vertical){if(a.x<o.x-r||a.x>o.x+o.w+r)continue;}
+  else{const t1=(o.x-r-a.x)/dx,t2=(o.x+o.w+r-a.x)/dx;lo=Math.max(lo,Math.min(t1,t2));hi=Math.min(hi,Math.max(t1,t2));if(lo>hi)continue;}
+  if(horizontal){if(a.y<o.y-r||a.y>o.y+o.h+r)continue;}
+  else{const t1=(o.y-r-a.y)/dy,t2=(o.y+o.h+r-a.y)/dy;lo=Math.max(lo,Math.min(t1,t2));hi=Math.min(hi,Math.max(t1,t2));}
+  if(lo<=hi)return false;
+ }return true;
 }
 export function moveActor(a,dx,dy,obstacles,r=22){
  // Swept steps stop high-speed dashes at walls instead of tunneling.
  // Growth can enlarge a body next to a wall; project it out before moving.
  a.x=clamp(a.x,r+35,WORLD.width-r-35);a.y=clamp(a.y,r+35,WORLD.height-r-35);
  for(let pass=0;pass<3;pass++)for(const o of obstacles){
-  const qx=clamp(a.x,o.x,o.x+o.w),qy=clamp(a.y,o.y,o.y+o.h),vx=a.x-qx,vy=a.y-qy,d=Math.hypot(vx,vy);
-  if(d>=r)continue;
+  const qx=clamp(a.x,o.x,o.x+o.w),qy=clamp(a.y,o.y,o.y+o.h),vx=a.x-qx,vy=a.y-qy,squared=vx*vx+vy*vy;
+  if(squared>=r*r)continue;const d=Math.sqrt(squared);
   if(d>.0001){a.x=qx+vx/d*(r+.01);a.y=qy+vy/d*(r+.01);}
   else{const sides=[{v:Math.abs(a.x-o.x),x:o.x-r-.01,y:a.y},{v:Math.abs(a.x-o.x-o.w),x:o.x+o.w+r+.01,y:a.y},{v:Math.abs(a.y-o.y),x:a.x,y:o.y-r-.01},{v:Math.abs(a.y-o.y-o.h),x:a.x,y:o.y+o.h+r+.01}].sort((a,b)=>a.v-b.v);a.x=sides[0].x;a.y=sides[0].y;}
  }

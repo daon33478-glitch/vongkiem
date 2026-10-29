@@ -2,15 +2,15 @@ import {MAPS,clamp,distance} from './world.js';
 import {actorScale} from './weapons.js';
 import {PlayerPrediction,RemoteTimeline} from './net-motion.js';
 export class OnlineView{
- constructor(snapshot,connection){this.online=true;this.connection=connection;this.events=[];this.introPlaying=false;this.tracks=new Map();this.snapshotInterval=140;this.interpolationDelay=140;this.apply(snapshot,true);}
+ constructor(snapshot,connection){this.online=true;this.connection=connection;this.events=[];this.introPlaying=false;this.tracks=new Map();this.snapshotInterval=connection.transport==='websocket'?60:140;this.interpolationDelay=this.snapshotInterval;this.apply(snapshot,true);}
  rememberInput(seq){this.prediction.remember(seq);}
  apply(s,first=false){
   const now=this.connection.now(),mapChanged=this.mapIndex!==s.mapIndex;
   if(!first&&this.received){const interval=now-this.received;if(interval>25&&interval<1500)this.snapshotInterval=this.snapshotInterval*.7+interval*.3;}
-  const pending=this.events,player=s.player;Object.assign(this,s);this.events=[...pending,...(s.events||[])];this.map=MAPS[s.mapIndex];this.received=now;
-  if(first||mapChanged){this.prediction=new PlayerPrediction(player);this.tracks.clear();this.snapshotInterval=this.interpolationDelay=140;}else this.prediction.reconcile(player);
+  const pending=this.events,player=s.player,previous=new Map((this.npcs||[]).map(a=>[a.id,a]));Object.assign(this,s);this.events=[...pending,...(s.events||[])];this.map=MAPS[s.mapIndex];this.received=now;
+  if(first||mapChanged){this.prediction=new PlayerPrediction(player);this.tracks.clear();this.snapshotInterval=this.interpolationDelay=this.connection.transport==='websocket'?60:140;}else this.prediction.reconcile(player);
   this.player=this.prediction.render();
-  const ids=new Set();for(const[kind,list]of[['n',this.npcs],['m',this.monsters],['p',this.projectiles]])for(const a of list){const key=kind+a.id;ids.add(key);let track=this.tracks.get(key);if(!track){track=new RemoteTimeline();this.tracks.set(key,track);}track.push(a,s.time,now);}
+  const ids=new Set();for(const[kind,list]of[['n',this.npcs],['m',this.monsters],['p',this.projectiles]])for(const a of list){const key=kind+a.id;ids.add(key);let track=this.tracks.get(key);if(!track){track=new RemoteTimeline();this.tracks.set(key,track);}track.push(a,s.time,now);if(kind==='n'){const old=!first&&!mapChanged&&previous.get(a.id);a.walkPhase=old?.walkPhase||0;if(old){a.x=old.x;a.y=old.y;a.angle=old.angle;}}}
   for(const key of this.tracks.keys())if(!ids.has(key))this.tracks.delete(key);
   if(mapChanged&&!first)this.events.push({type:'teleport',map:this.map.name,index:this.mapIndex,x:this.player.x,y:this.player.y});
  }
@@ -18,8 +18,8 @@ export class OnlineView{
   this.connection.input=this.introPlaying?{x:0,y:0}:{x:input.x||0,y:input.y||0};
   const now=this.connection.now();if(now-this.received>1500)return;this.readyIn=Math.max(0,(this.readyIn||0)-dt);
   this.prediction.step(dt,input,this.obstacles,!this.introPlaying&&this.readyIn<=0&&this.transferTo==null);this.player=this.prediction.render();
-  const target=clamp(this.snapshotInterval*1.15,100,500);this.interpolationDelay+=(target-this.interpolationDelay)*Math.min(1,dt*3);
-  for(const[kind,list]of[['n',this.npcs],['m',this.monsters],['p',this.projectiles]])for(const a of list){const pose=this.tracks.get(kind+a.id)?.sample(now,this.interpolationDelay);if(!pose)continue;const travel=distance(a,pose);Object.assign(a,pose);if(kind==='n'&&travel>.001)a.walkPhase=((a.walkPhase||0)+travel*.085/actorScale(a))%(Math.PI*2);}
+  const target=clamp(this.snapshotInterval*1.15,this.connection.transport==='websocket'?50:100,500);this.interpolationDelay+=(target-this.interpolationDelay)*Math.min(1,dt*3);
+  for(const[kind,list]of[['n',this.npcs],['m',this.monsters],['p',this.projectiles]])for(const a of list){const pose=this.tracks.get(kind+a.id)?.sample(now,this.interpolationDelay);if(!pose)continue;const travel=distance(a,pose);Object.assign(a,pose);if(kind==='n'){a.moving=travel>.001;if(a.moving)a.walkPhase=((a.walkPhase||0)+travel*.085/actorScale(a))%(Math.PI*2);}}
  }
  dash(x,y){if(this.player.dashCooldown>0||this.introPlaying||!this.player.alive||this.readyIn>0)return false;const seq=this.connection.command('dash');this.prediction.dash(x,y,seq);this.player=this.prediction.render();return true;}
  useItem(kind){if(!this.inventory[kind]||this.player[kind]>0||this.introPlaying||!this.player.alive||this.readyIn>0)return false;this.connection.command(kind);return true;}

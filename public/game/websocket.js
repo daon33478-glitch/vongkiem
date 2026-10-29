@@ -38,7 +38,8 @@ export class WebSocketConnection{
  pump(){
   this.cancel(this.timer);if(!this.active||!this.ready)return;const now=this.now();if(now-(this.lastInput??-Infinity)>=50)this.sendInput();
   if(now-(this.lastPing??-Infinity)>=1000){const id=++this.pingId;if(this.send({type:'ping',id})){this.pings.set(id,now);this.lastPing=now;while(this.pings.size>5)this.pings.delete(this.pings.keys().next().value);}}
-  this.timer=this.schedule(()=>this.pump(),20);
+  const nextInput=50-(now-this.lastInput),nextPing=1000-(now-this.lastPing);
+  this.timer=this.schedule(()=>this.pump(),Math.max(5,Math.min(nextInput,nextPing,50)));
  }
  command(kind){if(!this.active)return 0;const seq=++this.actionSeq;this.actions.push({kind,seq});this.actions=this.actions.slice(-6);this.sendInput();return seq;}
  fail(message){const reject=this.joinReject;this.joinResolve=this.joinReject=null;this.stop();if(reject)reject(new Error(message||'Không thể vào trận.'));else this.onError(message||'Kết nối đã kết thúc.');}

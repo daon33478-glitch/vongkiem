@@ -37,10 +37,10 @@ export class RoomHub{
   for(const[map,r]of this.rooms){const sessions=[...this.sessions.values()].filter(s=>s.map===map);if(!sessions.length){r.emptyAt??=now;if(now-r.emptyAt>30000)this.rooms.delete(map);continue;}r.emptyAt=null;r.world.advance(elapsed,sessions,now);}
   for(const s of this.sessions.values())this.transfer(s);this.revision++;
  }
- broadcast(){for(const s of this.sessions.values())this.snapshot(s);}
- snapshot(s){
-  if(!s.peer||s.peer.bufferedAmount>262144)return false;const world=this.rooms.get(s.map)?.world,view=world?.view(s.id,s.since);if(!view)return false;
-  const packet=s.encoder.encode({...view,revision:this.revision,epoch:s.epoch,population:this.population()},s.forceFull);
+ broadcast(){const frames=new Map(),population=this.population();for(const s of this.sessions.values()){let frame=frames.get(s.map);if(!frame){frame={visual:new WeakMap()};frames.set(s.map,frame);}this.snapshot(s,frame,population);}}
+ snapshot(s,frame=null,population=this.population()){
+  if(!s.peer||s.peer.bufferedAmount>262144)return false;const world=this.rooms.get(s.map)?.world,view=world?.view(s.id,s.since,frame);if(!view)return false;
+  const packet=s.encoder.encode({...view,revision:this.revision,epoch:s.epoch,population},s.forceFull);
   if(!s.peer.send(packet))return false;s.forceFull=false;s.since=view.eventSeq;return true;
  }
 }

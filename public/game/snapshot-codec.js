@@ -1,13 +1,37 @@
 const ENTITY_LISTS=new Set(['npcs','monsters','projectiles','pickups','chests','obstacles','itemDrops','hazards']);
-const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
-const clone=v=>JSON.parse(JSON.stringify(v,(_k,x)=>typeof x==='number'&&Number.isFinite(x)?Math.round(x*1000)/1000:x));
+const IMMUTABLE=new WeakSet();
+// Normalize once without round-tripping every snapshot through JSON. Reuse
+// unchanged, detached branches so comparing large blade lists is constant time.
+function same(a,b){
+ if(a===b)return true;if(!a||!b||typeof a!=='object'||typeof b!=='object'||Array.isArray(a)!==Array.isArray(b))return false;
+ const keys=Object.keys(a);if(keys.length!==Object.keys(b).length)return false;
+ for(const k of keys)if(!Object.hasOwn(b,k)||!same(a[k],b[k]))return false;return true;
+}
+function clone(v,before){
+ if(typeof v==='number')return Number.isFinite(v)?Math.round(v*1000)/1000:null;
+ if(v===null||typeof v==='string'||typeof v==='boolean')return v;
+ if(typeof v==='bigint')throw new TypeError('Snapshot cannot contain BigInt');
+ if(typeof v!=='object')return undefined;
+ if(IMMUTABLE.has(v))return v;
+ if(typeof v.toJSON==='function')return clone(v.toJSON(),before);
+ if(Array.isArray(v)){
+  const prior=Array.isArray(before)?before:[],out=new Array(v.length);let equal=Array.isArray(before)&&prior.length===v.length;
+  for(let i=0;i<v.length;i++){out[i]=clone(v[i],prior[i])??null;if(out[i]!==prior[i])equal=false;}return equal?before:out;
+ }
+ const prior=before&&typeof before==='object'&&!Array.isArray(before)?before:{},out={};let equal=prior===before,count=0;
+ for(const k of Object.keys(v)){const value=clone(v[k],prior[k]);if(value===undefined)continue;if(k==='__proto__')Object.defineProperty(out,k,{value,writable:true,enumerable:true,configurable:true});else out[k]=value;count++;if(!Object.hasOwn(prior,k)||value!==prior[k])equal=false;}
+ return equal&&count===Object.keys(prior).length?before:out;
+}
+// Only this factory can mark a normalized tree as immutable. Freezing caller
+// objects alone is insufficient because their children might still mutate.
+export function immutableSnapshot(value){const out=clone(value);const freeze=v=>{if(v&&typeof v==='object'){for(const x of Object.values(v))freeze(x);Object.freeze(v);IMMUTABLE.add(v);}};freeze(out);return out;}
 function fields(before,after){const set={},unset=[];for(const[k,v]of Object.entries(after))if(!same(before[k],v))set[k]=v;for(const k of Object.keys(before))if(!(k in after))unset.push(k);return{set,unset};}
 function entityList(list){return Array.isArray(list)&&list.every(a=>a&&a.id!==undefined)&&new Set(list.map(a=>a.id)).size===list.length;}
 export class SnapshotEncoder{
  constructor(){this.reset();}
  reset(){this.previous=null;this.seq??=0;} // keep ordering across resyncs and map transfers
  encode(snapshot,full=false){
-  const next=clone(snapshot),seq=this.seq+1;let packet;
+  const next=clone(snapshot,this.previous),seq=this.seq+1;let packet;
   if(full||!this.previous)packet={type:'state',seq,full:next};
   else{
    const patch=fields(this.previous,next),lists={};

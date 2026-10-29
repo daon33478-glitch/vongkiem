@@ -3,6 +3,10 @@ import {arm,actorScale,bodyRadius,moveSpeed,rotationSpeed,bladeIdState,restoreBl
 import {damageMonsters,updateMonsters} from '../public/game/monsters.js';
 import {updateBreakables} from '../public/game/props.js';
 import {updateReaction,celebrate} from '../public/game/reactions.js';
+import {immutableSnapshot} from '../public/game/snapshot-codec.js';
+
+const RING_VIEWS=new WeakMap();
+function renderRing(blades){let view=RING_VIEWS.get(blades);if(!view){const list=[],stride=Math.max(1,Math.ceil(blades.length/96));for(let i=0;i<blades.length;i+=stride)list.push({id:blades[i].id,offset:blades[i].offset});view=immutableSnapshot(list);RING_VIEWS.set(blades,view);}return view;}
 
 const RUN_KEYS=['score','rivalKills','peak','chestsOpened','monsterKills','bossKills','recentLoss','lastCombat','inventory','portal','portalCooldown','dangerTime','exploreTimer','panicTriggered','reaction','celebration','pickupJoy','sight'];
 export const freshRun=()=>({score:0,rivalKills:0,peak:3,survivalTime:0,chestsOpened:0,monsterKills:0,bossKills:0,recentLoss:0,lastCombat:0,inventory:{portal:0,haste:0,rage:0},portal:null,portalCooldown:4,dangerTime:0,exploreTimer:35,panicTriggered:false,reaction:null,celebration:null,pickupJoy:null,sight:null});
@@ -47,9 +51,10 @@ export class OnlineWorld extends Game{
  }
  step(dt){
   this.time+=dt;this.mapTime+=dt;this.updateHumanItems(dt);
-  for(const a of this.actors()){a.walkX=a.x;a.walkY=a.y;a.angle=(a.angle+rotationSpeed(a)*dt)%(Math.PI*2);a.pickupAura=Math.max(0,(a.pickupAura||0)-dt);a.airborne=Math.max(0,(a.airborne||0)-dt);}
+  // Footstep phase and sprite bobbing are client presentation, not game physics.
+  for(const a of this.actors()){a.angle=(a.angle+rotationSpeed(a)*dt)%(Math.PI*2);a.pickupAura=Math.max(0,(a.pickupAura||0)-dt);a.airborne=Math.max(0,(a.airborne||0)-dt);}
   for(const p of this.humans){if(!p.alive||p.transfer!=null||this.time<p.readyAt)continue;p.run.survivalTime=(p.run.survivalTime||0)+dt;p.dashCooldown=Math.max(0,p.dashCooldown-dt);let dx=p.airborne>0?0:p.packet?.x||0,dy=p.airborne>0?0:p.packet?.y||0,l=Math.hypot(dx,dy);if(l>1){dx/=l;dy/=l;}p.moving=l>.08;if(p.moving){p.vx=dx;p.vy=dy;if(Math.abs(dx)>.1)p.facing=dx<0?-1:1;}if(p.dash>0){dx=p.vx;dy=p.vy;p.moving=true;}moveActor(p,dx*moveSpeed(p)*(p.dash>0?3.15:1)*dt,dy*moveSpeed(p)*(p.dash>0?3.15:1)*dt,this.obstacles,bodyRadius(p));p.dash=Math.max(0,p.dash-dt);}
-  this.updateNpcs(dt);for(const a of this.actors()){const travel=Math.hypot(a.x-(a.walkX??a.x),a.y-(a.walkY??a.y));a.walkPhase=((a.walkPhase||0)+travel*.085/actorScale(a))%(Math.PI*2);if(travel<.001)a.moving=false;}
+  this.updateNpcs(dt);
   for(const p of this.humans)if(p.alive&&p.transfer==null&&this.time>=p.readyAt)this.withPlayer(p,()=>{this.recentLoss=(this.recentLoss||0)*Math.exp(-dt*1.4);this.sight={x:p.x,y:p.y-80,w:700,h:1100};updateReaction(this,dt);this.updatePortal(dt);});
   this.collectPickups(dt);this.updateClashes();damageMonsters(this,dt);updateMonsters(this,dt);this.updateChests(dt);updateBreakables(this,dt);this.updateLoot(dt);
   const focus=this.camp?this.targetPlayer(this.camp):this.targetPlayer(START);const old=this.player;this.player=focus;super.updateRespawns(dt);this.player=old;
@@ -57,15 +62,16 @@ export class OnlineWorld extends Game{
  }
  save(){const data={rng:this.rng.state,nextBlade:bladeIdState(),itemDrops:this.itemDrops};for(const key of WORLD_KEYS)data[key]=this[key];return encode(data);}
  static restore(text){const d=decode(text),g=Object.create(OnlineWorld.prototype);Object.assign(g,d);g.rng=random(d.rng);restoreBladeId(d.nextBlade);g.state='playing';g.events=[];g.clashes=[];g.bladePoses=new Map();g.visited=new Set([g.mapIndex]);g.player={id:'anchor',x:START.x,y:START.y,alive:false,power:0,weaponTier:0};Object.assign(g,freshRun());g.introPlaying=false;return g;}
- view(id,since=0){
+ view(id,since=0,frame=null){
   const p=this.humans.find(p=>p.id===id);if(!p)return null;
-  const rename=v=>v===id?'player':v,actor=a=>{const o=visual(a);o.id=rename(a.id);const blades=a.blades||[],stride=Math.max(1,Math.ceil(blades.length/96));o.renderBlades=[];if(a===p||this.time<p.readyAt||distance(a,p)<1800)for(let i=0;i<blades.length;i+=stride)o.renderBlades.push({id:blades[i].id,offset:blades[i].offset});return o;};
+  const shared=frame?.visual||new WeakMap(),visible=v=>{let out=shared.get(v);if(!out){out=visual(v);shared.set(v,out);}return out;};
+  const rename=v=>v===id?'player':v,actor=a=>{const o={...visible(a)};o.id=rename(a.id);o.renderBlades=a.blades&&(a===p||this.time<p.readyAt||distance(a,p)<1800)?renderRing(a.blades):[];return o;};
   const ev=this.eventLog.filter(e=>e.seq>since&&(!(e.type==='lost')||e.actorId===id)).map(e=>{const o={...e};for(const k of['actorId','a','b','id'])if(o[k])o[k]=rename(o[k]);o.byPlayer=e.viewerId===id||e.attackerId===id;if(e.viewerId&&e.viewerId!==id&&['panic','panicRun','reaction','itemUse','portalSpawn','dash'].includes(e.type))o.type='remote';return o;});
-  return {protocol:1,time:this.time,survivalTime:p.run.survivalTime||0,mapTime:this.mapTime,mapIndex:this.mapIndex,player:actor(p),npcs:[...this.npcs.filter(n=>n.alive),...this.humans.filter(a=>a.id!==id&&a.alive&&a.transfer==null)].map(actor),pickups:this.pickups.filter(i=>i.alive).map(visual),chests:this.chests.filter(c=>c.alive).map(visual),obstacles:this.obstacles.map(visual),monsters:this.monsters.filter(m=>m.alive).map(visual),projectiles:this.projectiles.map(visual),hazards:this.hazards.map(visual),itemDrops:this.itemDrops.map(visual),camp:this.camp,clashes:(this.time<(this.contactUntil||0)?this.lastContacts||[]:[]).map(c=>({...c,a:rename(c.a),b:rename(c.b)})),portal:p.run.portal,inventory:p.run.inventory,score:p.run.score,peak:p.run.peak,rivalKills:p.run.rivalKills,monsterKills:p.run.monsterKills,bossKills:p.run.bossKills,chestsOpened:p.run.chestsOpened,state:p.alive?'playing':'lost',lossReason:p.lossReason,transferTo:p.transfer,readyIn:Math.max(0,p.readyAt-this.time),leaderboard:this.humans.filter(a=>a.alive&&a.transfer==null).sort((a,b)=>b.weaponTier-a.weaponTier||b.power-a.power||b.run.rivalKills-a.run.rivalKills||a.id.localeCompare(b.id)).slice(0,3).map(a=>({id:rename(a.id),name:a.name,tier:a.weaponTier+1,power:a.power,kills:a.run.rivalKills})),playersOnline:this.humans.filter(a=>a.alive&&a.transfer==null).length,events:ev,eventSeq:this.eventSeq};
+  return {protocol:1,time:this.time,survivalTime:p.run.survivalTime||0,mapTime:this.mapTime,mapIndex:this.mapIndex,player:actor(p),npcs:[...this.npcs.filter(n=>n.alive),...this.humans.filter(a=>a.id!==id&&a.alive&&a.transfer==null)].map(actor),pickups:this.pickups.filter(i=>i.alive).map(visible),chests:this.chests.filter(c=>c.alive).map(visible),obstacles:this.obstacles.map(visible),monsters:this.monsters.filter(m=>m.alive).map(visible),projectiles:this.projectiles.map(visible),hazards:this.hazards.map(visible),itemDrops:this.itemDrops.map(visible),camp:this.camp,clashes:(this.time<(this.contactUntil||0)?this.lastContacts||[]:[]).map(c=>({...c,a:rename(c.a),b:rename(c.b)})),portal:p.run.portal,inventory:p.run.inventory,score:p.run.score,peak:p.run.peak,rivalKills:p.run.rivalKills,monsterKills:p.run.monsterKills,bossKills:p.run.bossKills,chestsOpened:p.run.chestsOpened,state:p.alive?'playing':'lost',lossReason:p.lossReason,transferTo:p.transfer,readyIn:Math.max(0,p.readyAt-this.time),leaderboard:this.humans.filter(a=>a.alive&&a.transfer==null).sort((a,b)=>b.weaponTier-a.weaponTier||b.power-a.power||b.run.rivalKills-a.run.rivalKills||a.id.localeCompare(b.id)).slice(0,3).map(a=>({id:rename(a.id),name:a.name,tier:a.weaponTier+1,power:a.power,kills:a.run.rivalKills})),playersOnline:this.humans.filter(a=>a.alive&&a.transfer==null).length,events:ev,eventSeq:this.eventSeq};
  }
 }
-const HIDDEN=new Set(['run','packet','blades','goal','path','hitTimes','hitActors','source','_offset','_cos','_sin']);
-function visual(v){const out={};for(const[k,x]of Object.entries(v))if(!k.startsWith('_')&&!HIDDEN.has(k)&&typeof x!=='function')out[k]=x;return out;}
+const HIDDEN=new Set(['run','packet','blades','goal','path','hitTimes','hitActors','source','walkX','walkY','walkPhase','think','pathTimer','homeX','homeY','spawnPower','spawnTier','bold','collect','order','layer','slot','peaceUntil','readyAt','transfer','returnAt','originX','originY','recharge','scaling','spawnedAt','cooldown','cooldownBase','respawnAt','speed','damage','range','cast']);
+function visual(v){const out={};for(const k in v)if(Object.hasOwn(v,k)&&!k.startsWith('_')&&!HIDDEN.has(k)&&typeof v[k]!=='function')out[k]=v[k];return out;}
 export function encode(value){return JSON.stringify(value,(k,v)=>{
  if(k==='packet'||k.startsWith('_'))return undefined;if(k==='goal'&&v)return{x:v.x,y:v.y};
  if(k==='blades'&&Array.isArray(v)){const first=v[0]?.id||0,n=v.length,uniform=v.every((b,i)=>b.id===first+i&&Math.abs(b.offset-i*Math.PI*2/Math.max(1,n))<1e-9);return uniform?{$blades:n,first}:{$pairs:v.flatMap(b=>[b.id,b.offset])};}

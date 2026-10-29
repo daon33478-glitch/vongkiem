@@ -1,4 +1,4 @@
-# Vòng Kiếm — RAM / WebSocket backend 1.10.0
+# Vòng Kiếm — RAM / WebSocket backend 1.10.1
 
 Single-process Node server for the online game. Authoritative game rooms live in RAM; the simulation never reads or writes a database. The frontend remains on its existing hosting service.
 
@@ -33,3 +33,9 @@ The frontend gateway needs the same `ARENA_JOIN_SECRET` and `ARENA_WS_URL=wss://
 - Render Free sleeps after 15 minutes without incoming HTTP/WebSocket traffic and may take about a minute to wake. It has CPU, bandwidth and instance-hour limits; it cannot guarantee Internet ping below 30 ms or sustained maximum capacity.
 
 This export includes only the backend, its shared game logic, client protocol modules and tests. It excludes images/audio, account credentials, frontend hosting identity, runtime data and local dependency folders. The source game repository maintains release notes and the export script.
+
+## 1.10.1 performance changes
+
+Snapshot comparison avoids repeated JSON encoding. Unchanged normalized geometry is cached immutably, per-room visual data is shared during a broadcast, and internal AI/path bookkeeping is excluded from the wire. Clients animate footsteps and use a 50 ms minimum WebSocket interpolation buffer with exact 50 ms input deadlines. Ping remains the measured round-trip time, not a synthetic target. Wall queries use allocation-free clipping; all authoritative blade colliders and physics substeps remain enabled.
+
+Free capacity must be measured with the actual game workload. The configured 8 players per map / 40 total is an admission limit, not a tested Free-tier performance guarantee.
